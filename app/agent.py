@@ -16,7 +16,7 @@ import inspect
 import json
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.exceptions import ModelHTTPError
 from fastmcp import Client
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -38,11 +38,14 @@ INSTRUCTIONS = """\
 """
 
 # モデルは実行時に渡す（テストではAPIを呼ばない TestModel に差し替えるため）
-agent = Agent(instructions=INSTRUCTIONS)
+agent = Agent(instructions=INSTRUCTIONS, output_type=[
+              str, DeferredToolRequests])
 agent.tool_plain(tools.search_glossary)
 agent.tool_plain(tools.get_lecture_summary)
+agent.tool_plain(tools.save_learning_log, requires_approval=True)
 
 # TODO(第3回 演習): tools.py に make_quiz を作り、ここで登録しよう
+agent.tool_plain(tools.make_quiz)
 
 # 第5回: 使う MCP サーバーの設定ファイル。Claude Desktop や Cursor と同じ "mcpServers" 形式
 MCP_CONFIG = Path(__file__).resolve().parent / "mcp_servers.json"
@@ -60,14 +63,17 @@ def load_mcp_servers(config_path: Path = MCP_CONFIG) -> list[MCPToolset]:
     古い SDK で作られたサーバー（fetch など）につなぐとき、接続方式の自動判定（"auto"）が
     警告を大量に出すため。"legacy" に固定すると新旧どちらのサーバーにも静かにつながる。
     """
-    config = json.loads(Path(config_path).read_text(encoding="utf-8"))["mcpServers"]
+    config = json.loads(Path(config_path).read_text(
+        encoding="utf-8"))["mcpServers"]
     toolsets = []
     for name, spec in config.items():
         if "url" in spec:
             transport = spec["url"]
         else:
-            transport = StdioTransport(spec["command"], spec.get("args", []), env=spec.get("env"))
-        toolsets.append(MCPToolset(Client(transport, mode="legacy")).prefixed(name))
+            transport = StdioTransport(
+                spec["command"], spec.get("args", []), env=spec.get("env"))
+        toolsets.append(MCPToolset(
+            Client(transport, mode="legacy")).prefixed(name))
     return toolsets
 
 
@@ -105,7 +111,8 @@ def print_trace(result) -> None:
             if isinstance(part, ToolCallPart):
                 print(f"[tool call]   {part.tool_name}({part.args})")
             elif isinstance(part, ToolReturnPart):
-                print(f"[tool return] {part.tool_name} -> {str(part.content)[:120]}…")
+                print(
+                    f"[tool return] {part.tool_name} -> {str(part.content)[:120]}…")
     print(f"[usage] {result.usage}")
 
 
@@ -113,8 +120,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="学習支援エージェントに質問する")
     parser.add_argument("question", nargs="?")
     parser.add_argument("--trace", action="store_true", help="ツール呼び出しを表示する")
-    parser.add_argument("--mcp", action="store_true", help="第5回: ツールを MCP サーバー（app/mcp_servers.json）から受け取る")
-    parser.add_argument("--list-tools", action="store_true", help="モデルに見えるツール一覧を表示して終了する（APIキー不要）")
+    parser.add_argument("--mcp", action="store_true",
+                        help="第5回: ツールを MCP サーバー（app/mcp_servers.json）から受け取る")
+    parser.add_argument("--list-tools", action="store_true",
+                        help="モデルに見えるツール一覧を表示して終了する（APIキー不要）")
     args = parser.parse_args()
 
     target = build_mcp_agent() if args.mcp else agent
@@ -129,6 +138,20 @@ def main() -> None:
         print("[tools] MCP サーバー（app/mcp_servers.json）")
     try:
         result = target.run_sync(args.question, model=build_model())
+        if isinstance(result.output, DeferredToolRequests):
+            print("\n[確認] 学習ログの保存リクエストが発生しました。")
+            # ユーザーに保存して良いか確認する
+            answer = input("ファイルを保存してもよろしいですか？ (y/N): ").strip().lower()
+            if answer == "y":
+                print("保存を実行します...")
+                result = target.run_sync(
+                    args.question,
+                    model=build_model(),
+                    resume=result.output.approve(),
+                )
+            else:
+                print("保存がキャンセルされました。")
+                return
     except ModelHTTPError as e:
         print(api_error_message(e.status_code, str(e.body)[:200]))
         raise SystemExit(1)
