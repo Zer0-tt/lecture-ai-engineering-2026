@@ -18,5 +18,16 @@
 
 - 取り組んだレベル： 実装 
 - やったこと：
+・app/tools.py に save_learning_log ツールを実装し、タイムスタンプ付きのMarkdownファイルとして learning_log/ フォルダに保存する処理を作成した。
+
+・app/agent.py にて save_learning_log に requires_approval=True を設定し、エージェントの出力型に DeferredToolRequests を追加した。
+
+・CLI（app/agent.py の main() 関数）に、承認待ち（DeferredToolRequests）を受け取ってユーザーに対話形式で確認（y/N）を求め、承認された場合に resume=result.output.approve() で処理を再開するハンドリング処理を実装した
+
 - 結果：
+・エージェントに保存を伴う指示を出した際、ファイル書き込みの直前で一度停止し、CLI上で「ファイルを保存してもよろしいですか？ (y/N):」と確認プロンプトが表示されるようになった。
+
+・y を選ぶと保存が実行され、それ以外を選ぶと安全にキャンセルされるインタラクティブな動作を確認できた。
+
 - 気づき・疑問：
+・Pydantic AIでは、ツールに requires_approval=True を指定するだけで自動的に実行が一時停止しDeferredToolRequests としてリクエストが返されるため、人間の承認を挟む安全なヒューマン・イン・ザ・ループの仕組みを容易に構築できることが分かった。
