@@ -6,6 +6,7 @@
 
 import json
 import random
+import datetime
 from functools import cache
 from pathlib import Path
 
@@ -103,3 +104,20 @@ def make_quiz(lecture: int) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def save_learning_log(content: str) -> str:
+    """学習の記録を learning_log/ フォルダに保存する。
+
+    学習内容のメモやログをファイルに書き込む前に使うこと。
+    """
+    # プロジェクトルートに learning_log フォルダを作る
+    log_dir = Path(__file__).resolve().parent.parent / "learning_log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # タイムスタンプをファイル名にして保存
+    filename = datetime.datetime.now().strftime("%Y%m%d_%H%M%S.md")
+    path = log_dir / filename
+    path.write_text(content, encoding="utf-8")
+    
+    return f"学習ログを {path.name} に保存しました。"
