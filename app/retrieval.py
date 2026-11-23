@@ -123,9 +123,44 @@ def open_index(path: Path):
     finally:
         db.close()
 
+def _build_page_lookup(source: Path = RAG_SOURCE) -> dict[str, dict[int, dict]]:
+    """document_id -> {page: page_dict} の辞書を作る（同一資料内で前後ページを引く用）。"""
+    by_doc: dict[str, dict[int, dict]] = defaultdict(dict)
+    for page in load_pages(source):
+        by_doc[page["document_id"]][page["page"]] = page
+    return by_doc
 
-def search(query: str) -> list[dict]:
-    """質問を埋め込み、近いページを最大RAG_TOP_K件返す。"""
+
+def _expand_neighbor_pages(hits: list[dict], source: Path = RAG_SOURCE, window: int = 1) -> list[dict]:
+    """検索結果の各ページについて、同一資料内で前後 `window` ページを追加し重複を省く。"""
+    by_doc = _build_page_lookup(source)
+    expanded: list[dict] = []
+    seen_page_ids: set[str] = set()
+
+    for hit in hits:
+        doc_id = hit["document_id"]
+        center_page = hit["page"]
+        doc_pages = by_doc.get(doc_id, {})
+
+        for target_page_num in range(center_page - window, center_page + window + 1):
+            page_info = doc_pages.get(target_page_num)
+            if not page_info:
+                continue
+            pid = page_info["page_id"]
+            if pid in seen_page_ids:
+                continue
+            seen_page_ids.add(pid)
+
+            item = dict(page_info)
+            if pid == hit["page_id"] and "distance" in hit:
+                item["distance"] = hit["distance"]
+            item["is_neighbor"] = target_page_num != center_page
+            expanded.append(item)
+
+    return expanded
+    
+def search(query: str, include_neighbors: bool = True) -> list[dict]:
+    """質問を埋め込み、近いページを最大RAG_TOP_K件返す（既定で前後1ページも付与）。"""
     if not isinstance(query, str) or not query.strip():
         raise ValueError("検索語が空です。")
     with open_index(RAG_DB) as db:
@@ -135,8 +170,11 @@ def search(query: str) -> list[dict]:
                    vec_distance_cosine(embedding, ?) AS distance
             FROM chunks ORDER BY distance, page_id LIMIT ?
         """, (sqlite_vec.serialize_float32(vector), RAG_TOP_K))
-        return [dict(row) for row in rows]
+        hits = [dict(row) for row in rows]
 
+    if not include_neighbors:
+        return hits
+    return _expand_neighbor_pages(hits, source=RAG_SOURCE, window=1)
 
 def search_graph(query: str) -> dict:
     """ベクトル検索を入口に、前後ページと共通用語で候補を広げる。"""
